@@ -75,10 +75,36 @@ The E0/E1 split is the point: a manifold can be measurably curved yet the
 curvature need not buy recall accuracy. The synthetic world is a scaffold — the
 real question is what these numbers do on a **real encoder** (Phase 2).
 
-## Swapping in a real encoder
+## End-to-end training & evaluation (Phase 2/3)
 
-`synthetic.py` is the only thing to replace. Provide (a) a `decode`-like map for
-the metric (or use the encoder's own decoder / a PCA chart), and (b) a corpus of
-real embeddings with a state signal `s`. Everything downstream is encoder-agnostic.
+`run_mvp.py` validates each operator *in isolation*. The Phase-2/3 pipeline trains
+**one model** — the Hopfield recall head `phi(q,s,h)` **+ a learnable conformal
+metric `lambda_theta(z)`** — under a single composite loss, with the **C2
+trajectory->point bridge** trained in parallel as an invertible module.
 
-See `IMPLEMENTATION_PLAN.md` for the phased build-out.
+```bash
+python train.py --quick            # synthetic, no network: full train -> checkpoint
+python eval.py  --split test       # gated dashboard (E0/GATE-1/E3/C2/grounding + Recall@k/MRR)
+python tests/test_pipeline.py      # unit checks (offline)
+```
+
+| File | Role |
+|------|------|
+| `config.py` | frozen `PREREG` gates + loss weights + hyperparameters (one place) |
+| `manifold_mvp/real.py` | **LoCoMo** loader + frozen encoder + PCA chart; drop-in for `synthetic.py` |
+| `manifold_mvp/conformal.py` | learnable warp `lambda_theta(z)` → `G = lambda_theta · J^T J` (GAGA-style) |
+| `manifold_mvp/losses.py` | `L = w_ret·L_ret + w_geo·L_geo + w_ent·L_ent + w_gnd·L_gnd` |
+| `manifold_mvp/invert.py` | genuinely invertible `sigma^-1` (neural + insertion-method baseline) + C2 gate |
+| `train.py` / `eval.py` | staged curriculum (head → +metric → C2) / held-out gated validation |
+
+**Composite loss:** InfoNCE retrieval (= the Hopfield logsumexp energy; ANCE-style
+hard negatives), a GAGA-style warp + local distance-matching geometry term, an
+entropy floor (anti-collapse), and anchor-coordinate grounding (anti-drift). C2 has
+its own reconstruction loss + gate (separability ≥3×, recon rel-err ≤0.20).
+
+**Real data (LoCoMo):** `pip install sentence-transformers`, download
+`data/locomo10.json` from <https://snap-research.github.io/locomo> (CC BY-NC 4.0),
+then `python train.py --data locomo`. Splits are **by conversation** (leakage-free);
+the same PCA chart from train is reused at eval so `lambda_theta` transfers.
+
+See `IMPLEMENTATION_PLAN.md` for the phased build-out and the literature map.
