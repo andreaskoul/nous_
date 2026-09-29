@@ -13,3 +13,6 @@ data/cache/
 # environments
 .venv/
 *.egg-info/
+
+# experiment stdout logs (results live in the JSON next to them)
+experiments/results/*.log
