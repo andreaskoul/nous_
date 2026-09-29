@@ -1,0 +1,604 @@
+{
+  "dataset": {
+    "conversations": 10,
+    "turns": 5882,
+    "qa": 1981,
+    "unresolved_evidence": 3,
+    "evaluated": 699,
+    "main_eval_excludes": "category 5 (adversarial)"
+  },
+  "folds": [
+    [
+      0,
+      1
+    ],
+    [
+      8,
+      9
+    ]
+  ],
+  "retrieval": {
+    "random": {
+      "hit@1": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "hit@5": [
+        0.0148,
+        0.0051,
+        0.0225
+      ],
+      "hit@10": [
+        0.0295,
+        0.013,
+        0.0418
+      ],
+      "recall@10": [
+        0.0253,
+        0.0105,
+        0.0385
+      ],
+      "mrr": [
+        0.0161,
+        0.0138,
+        0.0176
+      ],
+      "by_category_hit@5": {
+        "multi-hop": 0.0,
+        "temporal": 0.0,
+        "open-domain": 0.0,
+        "single-hop": 0.0292,
+        "adversarial": 0.0
+      },
+      "n": 542
+    },
+    "bm25": {
+      "hit@1": [
+        0.2417,
+        0.2059,
+        0.2881
+      ],
+      "hit@5": [
+        0.4613,
+        0.4295,
+        0.5021
+      ],
+      "hit@10": [
+        0.5627,
+        0.5344,
+        0.5992
+      ],
+      "recall@10": [
+        0.5024,
+        0.4847,
+        0.5285
+      ],
+      "mrr": [
+        0.3497,
+        0.3191,
+        0.3876
+      ],
+      "by_category_hit@5": {
+        "multi-hop": 0.2679,
+        "temporal": 0.5906,
+        "open-domain": 0.1379,
+        "single-hop": 0.5146,
+        "adversarial": 0.5223
+      },
+      "n": 542
+    },
+    "dense:all-MiniLM-L6-v2": {
+      "hit@1": [
+        0.1531,
+        0.1439,
+        0.1645
+      ],
+      "hit@5": [
+        0.3598,
+        0.3333,
+        0.3861
+      ],
+      "hit@10": [
+        0.4797,
+        0.4461,
+        0.5065
+      ],
+      "recall@10": [
+        0.4168,
+        0.3877,
+        0.456
+      ],
+      "mrr": [
+        0.2586,
+        0.2438,
+        0.272
+      ],
+      "by_category_hit@5": {
+        "multi-hop": 0.3393,
+        "temporal": 0.4724,
+        "open-domain": 0.069,
+        "single-hop": 0.3467,
+        "adversarial": 0.1911
+      },
+      "n": 542
+    },
+    "filesystem": {
+      "hit@1": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "hit@5": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "hit@10": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "recall@10": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mrr": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "by_category_hit@5": {
+        "multi-hop": 0.0,
+        "temporal": 0.0,
+        "open-domain": 0.0,
+        "single-hop": 0.0,
+        "adversarial": 0.0
+      },
+      "n": 542
+    },
+    "hybrid:bm25+all-MiniLM-L6-v2": {
+      "hit@1": [
+        0.2399,
+        0.2203,
+        0.2616
+      ],
+      "hit@5": [
+        0.4705,
+        0.4472,
+        0.4895
+      ],
+      "hit@10": [
+        0.5756,
+        0.5508,
+        0.6076
+      ],
+      "recall@10": [
+        0.5106,
+        0.49,
+        0.5568
+      ],
+      "mrr": [
+        0.3559,
+        0.3359,
+        0.381
+      ],
+      "by_category_hit@5": {
+        "multi-hop": 0.3571,
+        "temporal": 0.6063,
+        "open-domain": 0.2759,
+        "single-hop": 0.4745,
+        "adversarial": 0.3631
+      },
+      "n": 542
+    },
+    "static-head:all-MiniLM-L6-v2": {
+      "hit@1": [
+        0.1402,
+        0.1062,
+        0.1754
+      ],
+      "hit@5": [
+        0.321,
+        0.2701,
+        0.3896
+      ],
+      "hit@10": [
+        0.4336,
+        0.3826,
+        0.5022
+      ],
+      "recall@10": [
+        0.3774,
+        0.3112,
+        0.4665
+      ],
+      "mrr": [
+        0.2343,
+        0.1996,
+        0.281
+      ],
+      "by_category_hit@5": {
+        "multi-hop": 0.3125,
+        "temporal": 0.3937,
+        "open-domain": 0.1379,
+        "single-hop": 0.3102,
+        "adversarial": 0.1975
+      },
+      "n": 542
+    },
+    "static-head:all-MiniLM-L6-v2@pooled": {
+      "hit@1": [
+        0.1365,
+        0.1031,
+        0.1645
+      ],
+      "hit@5": [
+        0.31,
+        0.2701,
+        0.3636
+      ],
+      "hit@10": [
+        0.4151,
+        0.373,
+        0.4719
+      ],
+      "recall@10": [
+        0.3593,
+        0.3053,
+        0.4319
+      ],
+      "mrr": [
+        0.2243,
+        0.1894,
+        0.2668
+      ],
+      "by_category_hit@5": {
+        "multi-hop": 0.3125,
+        "temporal": 0.3858,
+        "open-domain": 0.1379,
+        "single-hop": 0.292,
+        "adversarial": 0.1847
+      },
+      "n": 542
+    },
+    "context-head:all-MiniLM-L6-v2": {
+      "hit@1": [
+        0.1513,
+        0.122,
+        0.198
+      ],
+      "hit@5": [
+        0.3506,
+        0.2894,
+        0.4199
+      ],
+      "hit@10": [
+        0.4373,
+        0.3826,
+        0.5108
+      ],
+      "recall@10": [
+        0.3665,
+        0.2982,
+        0.4584
+      ],
+      "mrr": [
+        0.2477,
+        0.2113,
+        0.2967
+      ],
+      "by_category_hit@5": {
+        "multi-hop": 0.375,
+        "temporal": 0.4173,
+        "open-domain": 0.2069,
+        "single-hop": 0.3248,
+        "adversarial": 0.1911
+      },
+      "n": 542
+    },
+    "context-head:all-MiniLM-L6-v2@pooled": {
+      "hit@1": [
+        0.1421,
+        0.1171,
+        0.188
+      ],
+      "hit@5": [
+        0.3321,
+        0.2729,
+        0.3983
+      ],
+      "hit@10": [
+        0.4096,
+        0.3462,
+        0.4848
+      ],
+      "recall@10": [
+        0.3483,
+        0.2794,
+        0.4411
+      ],
+      "mrr": [
+        0.2353,
+        0.2027,
+        0.2789
+      ],
+      "by_category_hit@5": {
+        "multi-hop": 0.3661,
+        "temporal": 0.4016,
+        "open-domain": 0.1034,
+        "single-hop": 0.3102,
+        "adversarial": 0.1783
+      },
+      "n": 542
+    },
+    "residual-head:all-MiniLM-L6-v2": {
+      "hit@1": [
+        0.1882,
+        0.1545,
+        0.2481
+      ],
+      "hit@5": [
+        0.3819,
+        0.3344,
+        0.4459
+      ],
+      "hit@10": [
+        0.4908,
+        0.4432,
+        0.5541
+      ],
+      "recall@10": [
+        0.4227,
+        0.3607,
+        0.5062
+      ],
+      "mrr": [
+        0.2874,
+        0.2504,
+        0.341
+      ],
+      "by_category_hit@5": {
+        "multi-hop": 0.3482,
+        "temporal": 0.4803,
+        "open-domain": 0.2069,
+        "single-hop": 0.3686,
+        "adversarial": 0.2166
+      },
+      "n": 542
+    },
+    "residual-head:all-MiniLM-L6-v2@pooled": {
+      "hit@1": [
+        0.1882,
+        0.1545,
+        0.2481
+      ],
+      "hit@5": [
+        0.3801,
+        0.3333,
+        0.4416
+      ],
+      "hit@10": [
+        0.4871,
+        0.4405,
+        0.5498
+      ],
+      "recall@10": [
+        0.42,
+        0.3592,
+        0.5019
+      ],
+      "mrr": [
+        0.2859,
+        0.2487,
+        0.3381
+      ],
+      "by_category_hit@5": {
+        "multi-hop": 0.3482,
+        "temporal": 0.4724,
+        "open-domain": 0.2069,
+        "single-hop": 0.3686,
+        "adversarial": 0.2166
+      },
+      "n": 542
+    },
+    "dense:all-MiniLM-L6-v2@pooled": {
+      "hit@1": [
+        0.1531,
+        0.1439,
+        0.1645
+      ],
+      "hit@5": [
+        0.3579,
+        0.3305,
+        0.3861
+      ],
+      "hit@10": [
+        0.4779,
+        0.4444,
+        0.5065
+      ],
+      "recall@10": [
+        0.415,
+        0.3845,
+        0.456
+      ],
+      "mrr": [
+        0.258,
+        0.2435,
+        0.2716
+      ],
+      "by_category_hit@5": {
+        "multi-hop": 0.3393,
+        "temporal": 0.4724,
+        "open-domain": 0.069,
+        "single-hop": 0.3431,
+        "adversarial": 0.1847
+      },
+      "n": 542
+    }
+  },
+  "gate1": {
+    "all-MiniLM-L6-v2": {
+      "context_top1": 0.1421,
+      "as_implemented": {
+        "baselines": {
+          "dense:all-MiniLM-L6-v2@pooled": 0.1531,
+          "filesystem": 0.0,
+          "static-head:all-MiniLM-L6-v2@pooled": 0.1365
+        },
+        "best": 0.1531,
+        "delta": -0.011,
+        "pass_": false
+      },
+      "honest": {
+        "baselines": {
+          "dense:all-MiniLM-L6-v2@pooled": 0.1531,
+          "filesystem": 0.0,
+          "static-head:all-MiniLM-L6-v2@pooled": 0.1365,
+          "dense:all-MiniLM-L6-v2": 0.1531,
+          "bm25": 0.2417,
+          "hybrid:bm25+all-MiniLM-L6-v2": 0.2399
+        },
+        "best": 0.2417,
+        "delta": -0.0996,
+        "pass_": false
+      }
+    }
+  },
+  "contrasts": {
+    "context@pooled - dense@pooled (all-MiniLM-L6-v2)": {
+      "hit@1": {
+        "mean": -0.01107011070110701,
+        "q_ci": [
+          -0.04428044280442804,
+          0.02029520295202952
+        ],
+        "cluster_ci": [
+          -0.03278688524590164,
+          0.027989821882951654
+        ]
+      },
+      "mrr": {
+        "mean": -0.02276575476225264,
+        "q_ci": [
+          -0.05086918170095532,
+          0.005497070015162162
+        ],
+        "cluster_ci": [
+          -0.04512595355020717,
+          0.007583314181249585
+        ]
+      }
+    },
+    "context@pooled - dense per-conv [oracle conv filter] (all-MiniLM-L6-v2)": {
+      "hit@1": {
+        "mean": -0.01107011070110701,
+        "q_ci": [
+          -0.04428044280442804,
+          0.02029520295202952
+        ],
+        "cluster_ci": [
+          -0.03278688524590164,
+          0.027989821882951654
+        ]
+      },
+      "mrr": {
+        "mean": -0.02328415666258111,
+        "q_ci": [
+          -0.0514993106283837,
+          0.0048969381639258165
+        ],
+        "cluster_ci": [
+          -0.04567986587440793,
+          0.007109724094581141
+        ]
+      }
+    },
+    "residual per-conv - dense per-conv (all-MiniLM-L6-v2)": {
+      "hit@1": {
+        "mean": 0.03505535055350553,
+        "q_ci": [
+          0.0036900369003690036,
+          0.06642066420664207
+        ],
+        "cluster_ci": [
+          0.00322061191626409,
+          0.09414758269720101
+        ]
+      },
+      "mrr": {
+        "mean": 0.02888454015038392,
+        "q_ci": [
+          0.0030980122851733773,
+          0.053888833830488723
+        ],
+        "cluster_ci": [
+          0.0017938224608526237,
+          0.07968771065080778
+        ]
+      }
+    },
+    "context per-conv - dense per-conv (all-MiniLM-L6-v2)": {
+      "hit@1": {
+        "mean": -0.0018450184501845018,
+        "q_ci": [
+          -0.03505535055350553,
+          0.02952029520295203
+        ],
+        "cluster_ci": [
+          -0.028985507246376812,
+          0.043256997455470736
+        ]
+      },
+      "mrr": {
+        "mean": -0.010842319879156213,
+        "q_ci": [
+          -0.03923980724783035,
+          0.017233332542458093
+        ],
+        "cluster_ci": [
+          -0.03721867632230441,
+          0.024977410947112855
+        ]
+      }
+    }
+  },
+  "geometry": {
+    "lambda_on_data": {
+      "mean": 1.012270212173462,
+      "std": 0.07324086874723434,
+      "min": 0.8392724394798279,
+      "max": 1.3085284233093262
+    },
+    "lambda_off_manifold_mean": 1.6546980142593384,
+    "final_warp": 0.003993083257228136,
+    "final_dist_match": 0.0002518632682040334,
+    "E0_shortcut": -0.019752025604248047,
+    "E0_go": false,
+    "E1_real_top1_among_20": {
+      "cosine_full_dim": 0.1333,
+      "euclid_latent": 0.0333,
+      "straight_metric": 0.0667,
+      "geodesic_metric": 0.0667
+    },
+    "E1_n_questions": 60
+  },
+  "system_one": {
+    "all-MiniLM-L6-v2": {
+      "fitted_beta_per_fold": [
+        16,
+        16
+      ],
+      "ece_fitted": 0.0276,
+      "ece_beta8": 0.1252,
+      "top1_acc": 0.1531,
+      "mean_conf": 0.1447,
+      "auroc_conf_predicts_correct": 0.7434,
+      "auroc_margin_predicts_correct": 0.7539,
+      "auroc_lowconf_flags_adversarial": 0.4416
+    }
+  },
+  "runtime_s": 363.1
+}

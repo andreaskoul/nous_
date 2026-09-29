@@ -189,6 +189,14 @@ def test_locomo_loader():
     inter = (torch.cdist(train.keys, test.keys) < 1e-6).any().item()
     assert not inter, "train/test memory overlap -> leakage"
 
+    # h is query-time state: two questions in the same conversation with
+    # DIFFERENT evidence must get the SAME history (no label leakage)
+    same = (train.qa_conv == train.qa_conv[0]).nonzero().flatten()
+    assert len(same) >= 2 and len(set(train.target[same].tolist())) >= 2
+    assert torch.allclose(train.h[same[0]], train.h[same[1]]), "h depends on the evidence -> leakage"
+    # memories carry their speaker
+    assert all(t.split(":", 1)[0] in ("A", "B") for t in train.texts)
+
     # the metric must build on the PCA chart (jacrev needs decode((d,))->(D,))
     g = PullbackMetric(train.decode, conformal=ConformalHead(z.shape[1], hidden=16))
     G = g.metric(train.sample_latents(8, seed=3))
@@ -196,6 +204,23 @@ def test_locomo_loader():
     assert (torch.linalg.eigvalsh(G) > 0).all() and torch.isfinite(G).all()
     print(f"  LoCoMo loader OK (bank N={train.keys.shape[0]}, QA={qa_q.shape[0]}, "
           f"latent d={z.shape[1]}, split leakage-free, metric SPD on chart)")
+
+
+def test_stats():
+    """Gate statistics behave: clear wins PASS, noise does not, calibration math."""
+    import numpy as np
+    from manifold_mvp import stats
+    rng = np.random.default_rng(0)
+    clusters = np.repeat(np.arange(10), 50)
+    base = rng.random(500) < 0.3
+    better = base | (rng.random(500) < 0.4)                  # large real gain
+    noisy = rng.random(500) < 0.32                           # ~no gain
+    assert stats.gate_verdict(better, base, clusters, 0.15)["verdict"] == "PASS"
+    assert stats.gate_verdict(noisy, base, clusters, 0.15)["verdict"] == "FAIL"
+    assert abs(stats.auroc([0.9, 0.8, 0.1, 0.2], [1, 1, 0, 0]) - 1.0) < 1e-9
+    assert abs(stats.auroc([0.5, 0.5], [1, 0]) - 0.5) < 1e-9
+    assert stats.ece([1.0, 1.0], [1, 1]) < 1e-9 and abs(stats.ece([0.9] * 10, [0] * 10) - 0.9) < 1e-9
+    print("  gate statistics OK (cluster-bootstrap PASS/FAIL, AUROC, ECE)")
 
 
 def test_locomo_training_step():
@@ -234,7 +259,8 @@ def test_locomo_training_step():
 
 if __name__ == "__main__":
     for fn in [test_conformal_metric_spd, test_losses_differentiable,
-               test_signature_inverse, test_locomo_loader, test_locomo_training_step]:
+               test_signature_inverse, test_locomo_loader, test_stats,
+               test_locomo_training_step]:
         print(f"[{fn.__name__}]")
         fn()
     print("\nALL PIPELINE UNIT CHECKS PASSED")

@@ -34,6 +34,7 @@ import re
 import torch
 
 _SESSION_RE = re.compile(r"^session_(\d+)$")
+_DIA_RE = re.compile(r"D\d+:\d+")
 
 
 # ---- minimal PCA chart (torch only; sklearn not required) --------------------
@@ -95,21 +96,27 @@ def _parse_conversation(sample: dict):
             dia = t.get("dia_id") or t.get("id")
             text = t.get("text") or t.get("clean_text") or ""
             if t.get("blip_caption"):
-                text = f"{text} [image: {t['blip_caption']}]"
+                text = f"{text} [shares image: {t['blip_caption']}]"
             if dia is None or not text:
                 continue
-            turns.append(dict(dia_id=dia, speaker=t.get("speaker", ""),
-                              text=text, session=sidx, order=order))
+            # the speaker name is part of the memory: LoCoMo questions are about
+            # named people, and a turn stripped of its speaker cannot answer them
+            speaker = t.get("speaker", "")
+            turns.append(dict(dia_id=dia, speaker=speaker,
+                              text=f"{speaker}: {text}" if speaker else text,
+                              session=sidx, order=order))
             order += 1
     qas = []
     for qa in sample.get("qa", []):
         ev = qa.get("evidence") or qa.get("evidences") or []
         if isinstance(ev, str):
             ev = [ev]
+        # some annotations pack several ids into one string ("D8:6; D9:17")
+        ev = [d for e in ev for d in _DIA_RE.findall(str(e))]
         q = qa.get("question")
         if q and ev:
             qas.append(dict(question=q, answer=qa.get("answer", ""),
-                           evidence=list(ev), category=qa.get("category", -1)))
+                           evidence=ev, category=qa.get("category", -1)))
     return turns, qas
 
 
@@ -136,15 +143,20 @@ class LoCoMoData:
                 dia2row[(cid, t["dia_id"])] = len(texts)
                 texts.append(t["text"]); conv_of.append(cid)
             conv_turn_rows = list(range(local_first, len(texts)))
+            # h must be available AT QUERY TIME. LoCoMo questions are asked after
+            # the conversation ends, so the honest history is the last session.
+            # (An earlier version used the turns preceding the evidence, which
+            # leaks where the answer is.)
+            last_sess = max((t["session"] for t in turns), default=0)
+            last_rows = [local_first + j for j, t in enumerate(turns) if t["session"] == last_sess]
             for qa in qas:
-                ev_rows = [conv_dia[d] for d in qa["evidence"] if d in conv_dia]
+                ev_rows = sorted({conv_dia[d] for d in qa["evidence"] if d in conv_dia})
                 if not ev_rows:
                     continue
-                first_ev = min(ev_rows)
-                hist_rows = [r for r in conv_turn_rows if r < first_ev]
-                qa_items.append(dict(question=qa["question"], target=first_ev,
+                qa_items.append(dict(question=qa["question"], target=ev_rows[0],
                                     evidence=ev_rows, conv_rows=conv_turn_rows,
-                                    hist_rows=hist_rows, category=qa["category"]))
+                                    hist_rows=last_rows, category=qa["category"],
+                                    conv=cid))
         if not texts:
             raise ValueError(f"No turns parsed from {json_path} (split={split}).")
 
@@ -174,7 +186,9 @@ class LoCoMoData:
         self.target = torch.tensor([it["target"] for it in qa_items], device=device)
         self.evidence = [it["evidence"] for it in qa_items]
         self.category = torch.tensor([it["category"] for it in qa_items], device=device)
+        self.qa_conv = torch.tensor([it["conv"] for it in qa_items], device=device)
         self.conv_of = torch.tensor(conv_of, device=device)
+        self.texts = texts
 
         # ---- anchors (grounding) + PCA chart (the metric's decoder) ----
         K = min(n_anchors, self.keys.shape[0])

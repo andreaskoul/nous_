@@ -8,6 +8,7 @@ checkpoints/
 # datasets & cached embeddings (LoCoMo is CC BY-NC 4.0 — fetch locally, do not commit)
 data/*.pt
 data/*.json
+data/cache/
 
 # environments
 .venv/
