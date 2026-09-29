@@ -43,7 +43,7 @@ from manifold_mvp.metric import PullbackMetric  # noqa: E402
 from manifold_mvp.conformal import ConformalHead  # noqa: E402
 from manifold_mvp.geodesic import geodesic, straight_length  # noqa: E402
 from manifold_mvp.curvature import curvature_probe  # noqa: E402
-from manifold_mvp.real import TorchPCA  # noqa: E402
+from manifold_mvp.metric import TorchPCA  # noqa: E402
 
 # Category ids as used by LoCoMo evaluations (e.g. Mem0): mapping is conventional,
 # the raw file only stores integers.
@@ -204,7 +204,7 @@ class ResidualContextHead(nn.Module):
 def question_state(T, conv_of, sess_of, qa):
     """Honest, query-time-available state. s = conversation fingerprint;
     h = mean of the LAST session's turns (all LoCoMo questions are asked after the
-    conversation ends). NOTE: manifold_mvp/real.py defines h from turns *before
+    conversation ends). NOTE: the v1 loader (manifold_mvp/real.py, since removed) defined h from turns *before
     the evidence*, which leaks the label; that is not used here."""
     S, H = [], []
     cache = {}

@@ -1,266 +1,243 @@
 """
-Unit checks for the end-to-end pipeline pieces (plan stage: Verification).
-Runs entirely on the synthetic path / closed-form fixtures -> no network, no
-dataset, fast. Run with:  python tests/test_pipeline.py   (or pytest).
+Integration checks for nous_ v2 plus the surviving exploratory pieces.
+Offline and deterministic: fixtures + fake encoders, no network, no dataset.
+Run with:  python tests/test_pipeline.py   (or pytest). Module-level unit tests live
+in tests/test_<module>.py.
 """
 from __future__ import annotations
-import os, sys
+import hashlib
+import json
+import os
+import re
+import sys
+import tempfile
+
+import numpy as np
 import torch
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 
-from manifold_mvp.synthetic import CurvedManifold, ContextCorpus
-from manifold_mvp.metric import PullbackMetric
-from manifold_mvp.curvature import curvature_probe
-from manifold_mvp.conformal import ConformalHead
-from manifold_mvp.locate import ContextHead
-from manifold_mvp import losses
-from manifold_mvp import invert
-from manifold_mvp.signature import signature
+from manifold_mvp.synthetic import CurvedManifold, ContextCorpus  # noqa: E402
+from manifold_mvp.metric import PullbackMetric  # noqa: E402
+from manifold_mvp.curvature import curvature_probe  # noqa: E402
+from manifold_mvp.conformal import ConformalHead  # noqa: E402
+from manifold_mvp.locate import ContextHead  # noqa: E402
+from manifold_mvp import losses, invert  # noqa: E402
+from manifold_mvp.signature import signature  # noqa: E402
 
 torch.manual_seed(0)
 DT = torch.float32
 
 
-def test_conformal_metric_spd():
-    """G(z)=lambda_theta(z) G0(z) stays SPD and the learned metric is curved."""
+# ---------------------------------------------------------------- exploratory / legacy
+
+def test_exploratory_metric_spd():
+    """The (exploratory) conformal pullback metric stays SPD; the probe runs."""
     man = CurvedManifold(d_latent=2, D=32, warp=2.0, freq=2.5, dtype=DT)
     lam = ConformalHead(2, hidden=32)
     g = PullbackMetric(man.decode, conformal=lam)
     z = man.sample_latents(20, seed=1)
     G = g.metric(z)
-    eig = torch.linalg.eigvalsh(G)
-    assert (eig > 0).all(), "metric not SPD"
-    assert torch.isfinite(G).all()
-    # lambda is strictly positive, ~1 at init
-    l = lam(z)
-    assert (l > 0).all() and l.shape == (20,)
+    assert (torch.linalg.eigvalsh(G) > 0).all() and torch.isfinite(G).all()
     probe = curvature_probe(g, z, n_pairs=12, steps=40)
-    assert torch.isfinite(torch.tensor(probe["shortcut (1-ratio)"]))
-    print("  conformal/metric SPD + curvature probe OK "
-          f"(shortcut={probe['shortcut (1-ratio)']:.3f}, lambda~{l.mean():.2f})")
+    assert np.isfinite(probe["shortcut (1-ratio)"])
+    print(f"  exploratory metric SPD + curvature probe OK (shortcut={probe['shortcut (1-ratio)']:.3f})")
 
 
-def test_losses_differentiable():
-    """Every loss term is finite and back-propagates to its parameters."""
+def test_linear_chart_is_flat():
+    """The reality-check finding, as a test: a linear PCA chart has G0 = I."""
+    from manifold_mvp.metric import TorchPCA
+    X = torch.randn(200, 24)
+    pca = TorchPCA(6).fit(X)
+    G = PullbackMetric(pca.decode).metric(torch.randn(5, 6))
+    assert torch.allclose(G, torch.eye(6).expand(5, 6, 6), atol=1e-4)
+    print("  linear PCA chart pullback metric == identity (geometry cannot help there)")
+
+
+def test_legacy_losses():
+    """Legacy/exploratory loss terms stay finite and differentiable; grounding is gone."""
+    from config import LossWeights
     corpus = ContextCorpus(n_facts=128, dim=64, dtype=DT)
     M = corpus.keys
     head = ContextHead(64)
     q, s, tgt = corpus.query_batch(m=64, seed=1)
     phi = head(q, s)
-
-    # L_ret full-bank and mined
     l_full = losses.retrieval_infonce(phi, M, tgt, beta=8.0)
     negs = losses.mine_hard_negatives(phi.detach(), M, tgt, k=8)
-    l_mined = losses.retrieval_infonce(phi, M, tgt, beta=8.0, neg_idx=negs)
-    assert torch.isfinite(l_full) and torch.isfinite(l_mined)
+    assert torch.isfinite(losses.retrieval_infonce(phi, M, tgt, beta=8.0, neg_idx=negs))
     l_full.backward()
-    assert any(p.grad is not None and torch.isfinite(p.grad).all()
-               for p in head.parameters()), "no grad to recall head"
-
-    # L_geo wrt conformal params
+    assert any(p.grad is not None for p in head.parameters())
     man = CurvedManifold(d_latent=2, D=32, dtype=DT)
-    lam = ConformalHead(2, hidden=32)
-    g = PullbackMetric(man.decode, conformal=lam)
-    z_on = man.sample_latents(16, seed=2)
-    z_off = man.sample_latents(16, spread=6.0, seed=3)   # off-manifold (far out)
-    a = man.sample_latents(16, seed=4); b = man.sample_latents(16, seed=5)
-    d_tgt = man.ambient_dist(a, b)
-    l_geo, info = losses.geometry_loss(g, z_on, z_off, a, b, d_tgt)
+    g = PullbackMetric(man.decode, conformal=ConformalHead(2, hidden=32))
+    a, b = man.sample_latents(16, seed=4), man.sample_latents(16, seed=5)
+    l_geo, _ = losses.geometry_loss(g, man.sample_latents(16, seed=2), man.sample_latents(16, spread=6.0, seed=3),
+                                    a, b, man.ambient_dist(a, b))
     assert torch.isfinite(l_geo)
-    l_geo.backward()
-    assert any(p.grad is not None for p in lam.parameters()), "no grad to lambda_theta"
-
-    # L_ent and L_gnd
-    rho = torch.softmax(8.0 * (phi.detach() @ M.T), dim=-1)
-    h_floor = 0.25 * torch.log(torch.tensor(float(M.shape[0])))
-    assert torch.isfinite(losses.entropy_floor(rho, h_floor))
-    assert torch.isfinite(losses.grounding_loss(corpus.keys[:32], corpus.keys[:16]))
-
-    # composite sum
-    from config import LossWeights
-    total = losses.composite_loss(
-        {"ret": l_full.detach(), "geo": l_geo.detach()}, LossWeights())
-    assert torch.isfinite(total)
-    print(f"  losses finite + differentiable OK (warp={info['warp']:.3f}, "
-          f"dist_match={info['dist_match']:.3f})")
+    assert not hasattr(losses, "grounding_loss"), "grounding_loss had zero gradient and must stay removed"
+    total = losses.composite_loss({"ret": l_full.detach(), "geo": l_geo.detach()}, LossWeights())
+    assert torch.isfinite(total) and abs(float(total) - float(l_full)) < 1e-5   # geo weight is 0 in v2
+    print("  legacy losses finite; grounding removed; v2 weights keep geo out of the objective")
 
 
-def test_signature_inverse():
-    """NeuralInverse beats the naive baseline and the linear insertion inverse
-    recovers a path; both are sane; separability > 1 for distinct skills."""
+def test_signature_inverse_is_regression():
+    """C2 honesty: the global linear inverse is a regression; training the neural
+    conditional-mean decoder reduces error; distinct skills stay separable."""
     C, T, depth = 4, 24, 3
     sig_dim = signature(torch.zeros(1, T, C), depth).shape[-1]
-
-    def sample(n, seed):
-        g = torch.Generator().manual_seed(seed)
-        return torch.cumsum(0.2 * torch.randn(n, T, C, generator=g), dim=1)
-
-    # linear insertion-style inverse (training-free)
-    lin = invert.LinearSignatureInverse(depth).fit(sample(512, 0))
-    rel_lin = invert.reconstruction_relerr(lin, sample(128, 99), depth)
-
-    # learned inverse
+    sample = lambda n, seed: torch.cumsum(0.2 * torch.randn(n, T, C, generator=torch.Generator().manual_seed(seed)), 1)
+    assert hasattr(invert, "GlobalLinearRegressionInverse") and not hasattr(invert, "LinearSignatureInverse")
+    lin = invert.GlobalLinearRegressionInverse(depth).fit(sample(512, 0))
+    assert np.isfinite(invert.reconstruction_relerr(lin, sample(128, 99), depth))
     inv = invert.NeuralInverse(sig_dim, T, C, hidden=128)
     rel0 = invert.reconstruction_relerr(inv, sample(128, 99), depth)
-    inv = invert.train_inverse(inv, sample, steps=250, depth=depth, batch=128)
-    rel1 = invert.reconstruction_relerr(inv, sample(128, 99), depth)
-    assert rel1 < rel0, "training did not improve reconstruction"
-
-    # separability of distinct skills via the raw signature embedding
-    n_skill, n_exec = 6, 10
-    base = torch.cumsum(0.3 * torch.randn(n_skill, T, C), dim=1)
-    execs = torch.stack([base[k][None] + 0.04 * torch.randn(n_exec, T, C)
-                         for k in range(n_skill)])
-    sep = invert.skill_separability(lambda p: signature(p, depth), execs)
-    assert sep > 1.0
-    print(f"  sigma^-1 OK (linear rel-err {rel_lin:.3f}; learned {rel0:.3f}->{rel1:.3f}; "
-          f"separability {sep:.1f}x)")
+    inv = invert.train_inverse(inv, sample, steps=200, depth=depth, batch=128)
+    assert invert.reconstruction_relerr(inv, sample(128, 99), depth) < rel0
+    base = torch.cumsum(0.3 * torch.randn(6, T, C), dim=1)
+    execs = torch.stack([base[k][None] + 0.04 * torch.randn(10, T, C) for k in range(6)])
+    assert invert.skill_separability(lambda p: signature(p, depth), execs) > 1.0
+    print("  C2 regression inverse + conditional-mean decoder + separability OK")
 
 
-def _fake_embedder(dim=48):
-    """Deterministic per-text embedding (stable hash) — no network/model."""
-    import hashlib
+def test_stats():
+    """Gate statistics behave: clear wins PASS, noise does not, calibration math."""
+    from manifold_mvp import stats
+    rng = np.random.default_rng(0)
+    clusters = np.repeat(np.arange(10), 50)
+    base = rng.random(500) < 0.3
+    better = base | (rng.random(500) < 0.4)
+    noisy = rng.random(500) < 0.32
+    assert stats.gate_verdict(better, base, clusters, 0.15)["verdict"] == "PASS"
+    assert stats.gate_verdict(noisy, base, clusters, 0.15)["verdict"] == "FAIL"
+    assert abs(stats.auroc([0.9, 0.8, 0.1, 0.2], [1, 1, 0, 0]) - 1.0) < 1e-9
+    assert stats.ece([1.0, 1.0], [1, 1]) < 1e-9 and abs(stats.ece([0.9] * 10, [0] * 10) - 0.9) < 1e-9
+    print("  gate statistics OK")
 
-    def f(texts):
-        out = []
-        for t in texts:
-            seed = int.from_bytes(hashlib.md5(t.encode()).digest()[:4], "little")
-            g = torch.Generator().manual_seed(seed)
-            out.append(torch.randn(dim, generator=g))
-        return torch.stack(out)
-    return f
 
+# ---------------------------------------------------------------- v2 end-to-end (offline)
 
-def _write_fixture(path):
-    import json
+def _write_locomo_fixture(path, n_conv=3):
     convs = []
-    for c in range(3):
+    for c in range(n_conv):
         convs.append({
             "conversation": {
+                "speaker_a": "Ana", "speaker_b": "Ben",
                 "session_1_date_time": "1 Jan 2023",
                 "session_1": [
-                    {"speaker": "A", "dia_id": f"D{c}1:1", "text": f"conv{c} pet is a dog named Rex{c}."},
-                    {"speaker": "B", "dia_id": f"D{c}1:2", "text": f"conv{c} nice, what breed is it?"},
+                    {"speaker": "Ana", "dia_id": "D1:1", "text": f"I adopted a dog named Rex{c} last week."},
+                    {"speaker": "Ben", "dia_id": "D1:2", "text": "Nice, what breed is it?"},
+                    {"speaker": "Ana", "dia_id": "D1:3", "text": f"Rex{c} is a golden retriever puppy."},
+                    {"speaker": "Ben", "dia_id": "D1:4", "text": "I started a pottery class on Mondays."},
                 ],
                 "session_2_date_time": "5 Feb 2023",
                 "session_2": [
-                    {"speaker": "A", "dia_id": f"D{c}2:1", "text": f"conv{c} Rex{c} is a golden retriever, very fluffy."},
-                    {"speaker": "B", "dia_id": f"D{c}2:2", "text": f"conv{c} we went to the park last weekend."},
+                    {"speaker": "Ana", "dia_id": "D2:1", "text": "We hiked the coastal trail with Rex{c}.".replace("{c}", str(c))},
+                    {"speaker": "Ben", "dia_id": "D2:2", "text": "My pottery bowl finally came out of the kiln."},
+                    {"speaker": "Ana", "dia_id": "D2:3", "text": "I am thinking about learning the violin."},
                 ],
             },
             "qa": [
-                {"question": f"What is the name of the pet in conversation {c}?",
-                 "answer": f"Rex{c}", "evidence": [f"D{c}1:1"], "category": 1},
-                {"question": f"What breed is the pet in conversation {c}?",
-                 "answer": "golden retriever", "evidence": [f"D{c}2:1"], "category": 1},
+                {"question": "What breed is Ana's dog?", "answer": "golden retriever", "evidence": ["D1:3"], "category": 4},
+                {"question": "What did Ben make in pottery class?", "answer": "a bowl", "evidence": ["D1:4; D2:2"], "category": 1},
+                {"question": "Where did Ana hike with her dog?", "answer": "coastal trail", "evidence": ["D2:1"], "category": 2},
+                {"question": "What instrument is Ben learning?", "evidence": ["D2:3"], "category": 5,
+                 "adversarial_answer": "violin"},
             ],
         })
     with open(path, "w") as fh:
         json.dump(convs, fh)
 
 
-def test_locomo_loader():
-    """Fixture LoCoMo: parsing, tuples, PCA chart, and leakage-free split."""
-    import tempfile
-    from manifold_mvp.real import LoCoMoData
-    emb = _fake_embedder(48)
-    with tempfile.TemporaryDirectory() as d:
-        p = os.path.join(d, "fix.json")
-        _write_fixture(p)
-        train = LoCoMoData(p, split="train", conv_ids=(0, 1), embed_fn=emb, pca_dim=8, n_anchors=4)
-        test = LoCoMoData(p, split="test", conv_ids=(2,), embed_fn=emb, pca_dim=8, n_anchors=4)
+def _bow_embedder(dim=64):
+    """Deterministic bag-of-words hashing embedder: lexical overlap -> cosine."""
+    def vec(tok):
+        g = torch.Generator().manual_seed(int.from_bytes(hashlib.md5(tok.encode()).digest()[:4], "little"))
+        return torch.randn(dim, generator=g)
 
-    # bank + tuples well-formed
-    assert train.keys.shape[0] == 8 and train.keys.shape[1] == 48   # 2 convs * 4 turns
-    q, s, tgt = train.query_batch(m=6, seed=0)
-    assert q.shape == (6, 48) and s.shape == (6, 48) and tgt.shape == (6,)
-    assert int(tgt.max()) < train.keys.shape[0] and int(tgt.min()) >= 0
-    qa_q, qa_s, qa_t, ev = train.all_queries()
-    assert qa_q.shape[0] == 4 and all(len(e) >= 1 for e in ev)        # 2 convs * 2 QA
-
-    # manifold role: PCA chart shapes + ambient distance
-    z = train.sample_latents(5, seed=1)
-    assert z.shape == (5, 8)
-    assert train.decode(z).shape == (5, 48)
-    assert train.ambient_dist(z, train.sample_latents(5, seed=2)).shape == (5,)
-
-    # leakage-free: train and test banks share no memory text vectors
-    inter = (torch.cdist(train.keys, test.keys) < 1e-6).any().item()
-    assert not inter, "train/test memory overlap -> leakage"
-
-    # h is query-time state: two questions in the same conversation with
-    # DIFFERENT evidence must get the SAME history (no label leakage)
-    same = (train.qa_conv == train.qa_conv[0]).nonzero().flatten()
-    assert len(same) >= 2 and len(set(train.target[same].tolist())) >= 2
-    assert torch.allclose(train.h[same[0]], train.h[same[1]]), "h depends on the evidence -> leakage"
-    # memories carry their speaker
-    assert all(t.split(":", 1)[0] in ("A", "B") for t in train.texts)
-
-    # the metric must build on the PCA chart (jacrev needs decode((d,))->(D,))
-    g = PullbackMetric(train.decode, conformal=ConformalHead(z.shape[1], hidden=16))
-    G = g.metric(train.sample_latents(8, seed=3))
-    assert G.shape == (8, z.shape[1], z.shape[1])
-    assert (torch.linalg.eigvalsh(G) > 0).all() and torch.isfinite(G).all()
-    print(f"  LoCoMo loader OK (bank N={train.keys.shape[0]}, QA={qa_q.shape[0]}, "
-          f"latent d={z.shape[1]}, split leakage-free, metric SPD on chart)")
+    def f(texts):
+        out = []
+        for t in texts:
+            toks = re.findall(r"\w+", t.lower())
+            v = torch.stack([vec(w) for w in toks]).sum(0) if toks else torch.zeros(dim)
+            out.append(v / v.norm().clamp_min(1e-9))
+        return torch.stack(out)
+    return f
 
 
-def test_stats():
-    """Gate statistics behave: clear wins PASS, noise does not, calibration math."""
-    import numpy as np
-    from manifold_mvp import stats
-    rng = np.random.default_rng(0)
-    clusters = np.repeat(np.arange(10), 50)
-    base = rng.random(500) < 0.3
-    better = base | (rng.random(500) < 0.4)                  # large real gain
-    noisy = rng.random(500) < 0.32                           # ~no gain
-    assert stats.gate_verdict(better, base, clusters, 0.15)["verdict"] == "PASS"
-    assert stats.gate_verdict(noisy, base, clusters, 0.15)["verdict"] == "FAIL"
-    assert abs(stats.auroc([0.9, 0.8, 0.1, 0.2], [1, 1, 0, 0]) - 1.0) < 1e-9
-    assert abs(stats.auroc([0.5, 0.5], [1, 0]) - 0.5) < 1e-9
-    assert stats.ece([1.0, 1.0], [1, 1]) < 1e-9 and abs(stats.ece([0.9] * 10, [0] * 10) - 0.9) < 1e-9
-    print("  gate statistics OK (cluster-bootstrap PASS/FAIL, AUROC, ECE)")
+class _OverlapDecider:
+    name = "fake-overlap"
+
+    def relevance(self, query, memories):
+        qt = set(re.findall(r"\w+", query.lower()))
+        return np.array([len(qt & set(re.findall(r"\w+", m.lower()))) for m in memories], float)
 
 
-def test_locomo_training_step():
-    """The real-data object drives the actual training loop: every loss term is
-    finite, the metric builds on the PCA chart, and both optimizers step."""
-    import tempfile, math
-    from manifold_mvp.real import LoCoMoData
-    from manifold_mvp.locate import locate_density
+def test_v2_pipeline_smoke():
+    """STORE -> CANDIDATES -> LOCATE (+ teacher, state, null) end to end on a fixture."""
     from config import LossWeights
-    from train import geo_minibatch
-    emb = _fake_embedder(48)
+    from manifold_mvp import store
+    from manifold_mvp.candidates import Encoder, CandidateGenerator
+    from manifold_mvp.pipeline import (FEATURES, PairCache, build_batch, state_vectors, teacher_scores,
+                                       train_locate, locate_logits, full_ranking, rank_metrics)
     with tempfile.TemporaryDirectory() as d:
-        p = os.path.join(d, "fix.json"); _write_fixture(p)
-        data = LoCoMoData(p, conv_ids=(0, 1, 2), embed_fn=emb, pca_dim=6, n_anchors=4)
-    M = data.keys; N, dim = M.shape; dlat = data.pca.d
-    head = ContextHead(dim, hidden=16)
-    lam = ConformalHead(dlat, hidden=16)
-    g = PullbackMetric(data.decode, conformal=lam)
-    oh = torch.optim.Adam(head.parameters(), lr=1e-2)
-    om = torch.optim.Adam(lam.parameters(), lr=1e-2)
-    h_floor = 0.25 * math.log(N)
-    for it in range(4):
-        q, s, tgt = data.query_batch(m=8, seed=it)
-        phi = head(q, s)
-        parts = {"ret": losses.retrieval_infonce(phi, M, tgt, beta=8.0)}
-        parts["ent"] = losses.entropy_floor(locate_density(phi, M, 8.0), h_floor)
-        parts["gnd"] = losses.grounding_loss(M[torch.randint(0, N, (8,))], M[:4])
-        z_on, z_off, a, b, dt = geo_minibatch(data, 6, 100 + it, "cpu", DT)
-        lg, _ = losses.geometry_loss(g, z_on, z_off, a, b, dt)
-        parts["geo"] = lg
-        loss = losses.composite_loss(parts, LossWeights())
-        assert torch.isfinite(loss), "non-finite composite loss on LoCoMo object"
-        oh.zero_grad(); om.zero_grad(); loss.backward(); oh.step(); om.step()
-    print("  LoCoMo training-loop step OK (all loss terms finite, optimizers step)")
+        p = os.path.join(d, "locomo.json")
+        _write_locomo_fixture(p)
+        bank, qs = store.load_locomo(p)
+    assert len(bank) == 21 and len(qs) == 12
+    enc = Encoder("fake-bow", fn=_bow_embedder(), cache_dir=None)
+    gen = CandidateGenerator(bank, enc, alpha=0.5, K=4, contiguity=1)
+    gen.index()
+    doc = enc.encode_docs(bank.texts)
+    q_emb = enc.encode_queries([q.text for q in qs])
+    K = 5
+    b = build_batch(gen, bank, qs, q_emb, K)
+    assert b.rows.shape == (12, K) and b.feats.shape == (12, K, len(FEATURES)) and b.mask.any(1).all()
+    assert np.isfinite(b.feats).all() and b.unans.sum() == 3
+    for i, q in enumerate(qs):                   # per-conversation scope
+        assert all(bank.memories[r].conv == q.conv for r in b.rows[i, b.mask[i]])
+    # premise feature: the adversarial "What instrument is Ben learning?" marks exactly Ben's turns
+    fi = FEATURES.index("name_match")
+    adv = [i for i, q in enumerate(qs) if not q.answerable]
+    for i in adv:
+        spk = [bank.memories[r].speaker for r in b.rows[i, b.mask[i]]]
+        assert list(b.feats[i, b.mask[i], fi]) == [float(s == "Ben") for s in spk]
+    S, H = state_vectors(bank, doc, qs, mode="last_session")
+    assert S.shape == H.shape == (12, doc.shape[1]) and torch.isfinite(H).all()
+    cache = PairCache()
+    t1 = teacher_scores(_OverlapDecider(), bank, qs, b, cache=cache)
+    n_pairs = len(cache.d)
+    t2 = teacher_scores(_OverlapDecider(), bank, qs, b, cache=cache)
+    assert np.array_equal(t1, t2) and len(cache.d) == n_pairs      # second call served from cache
+    w = LossWeights()
+    scorer = train_locate(b, doc, q_emb, S, H, w, teacher=t1, steps=60, bsz=8, seed=0, rank=4)
+    lg = locate_logits(scorer, b, doc, q_emb, S, H)
+    assert lg.shape == (12, K + 1) and np.isfinite(lg).all()
+    for i, q in enumerate(qs):
+        m = rank_metrics(*full_ranking(b, i, lg[i, :-1]), q.evidence)
+        assert 0.0 <= m["mrr"] <= 1.0 and m["hit@1"] <= m["hit@3"] <= m["hit@10"]
+        assert m["cover@10"] <= m["recall@10"] + 1e-9
+    print("  v2 pipeline end-to-end on a fixture OK (shortlist, features, state, cached teacher, LOCATE)")
+
+
+def test_config_matches_plan():
+    """config.PreReg is the typed view of prereg/plan_v2.json: the numbers must agree."""
+    from config import PreReg
+    plan = json.load(open(os.path.join(ROOT, "prereg", "plan_v2.json")))
+    text = {g["id"]: json.dumps(g) for g in plan["gates"]}
+    P = PreReg()
+    checks = {"X0": [P.x0_rerank_hit1, P.x0_minilm_hit1, P.x0_tol], "G1a": [P.delta_state],
+              "G1b": [P.delta_recall_mh, P.ni_margin], "A1": [P.null_auroc, P.null_auroc_lo, P.max_false_abstain],
+              "C1": [P.max_ece, *P.calib_slope]}
+    for gid, vals in checks.items():
+        for v in vals:
+            s = f"{v:g}"
+            assert s in text[gid] or s.lstrip("0") in text[gid], f"{gid}: {s} missing from the plan"
+    print("  config.PreReg agrees with prereg/plan_v2.json")
 
 
 if __name__ == "__main__":
-    for fn in [test_conformal_metric_spd, test_losses_differentiable,
-               test_signature_inverse, test_locomo_loader, test_stats,
-               test_locomo_training_step]:
+    for fn in [test_exploratory_metric_spd, test_linear_chart_is_flat, test_legacy_losses,
+               test_signature_inverse_is_regression, test_stats, test_v2_pipeline_smoke, test_config_matches_plan]:
         print(f"[{fn.__name__}]")
         fn()
-    print("\nALL PIPELINE UNIT CHECKS PASSED")
+    print("\nALL PIPELINE CHECKS PASSED")

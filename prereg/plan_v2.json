@@ -1,0 +1,180 @@
+{
+  "version": "2.0",
+  "status": "draft",
+  "created": "2026-09-29",
+  "title": "nous_ v2: calibrated candidate + evidence-density layer under a System-One decision model",
+  "supersedes": "config.PreReg v1 gates (delta2 top-1 vs cosine/static/filesystem, E0/E1, C2 recon, grounding drift); retired 2026-09-29, see prereg/deviations.md",
+  "workflow": "draft -> set status 'frozen' -> python -m manifold_mvp.prereg freeze prereg/plan_v2.json -> commit plan + lock together -> confirmatory scripts call manifold_mvp.prereg.require_confirmatory(). Any later edit is a deviation: log it in prereg/deviations.md and re-freeze with --force.",
+  "datasets": {
+    "locomo": "data/locomo10.json",
+    "locomo_conv": ["data/locomo10_dialog.json", "data/locomo10_multimem_full.json"],
+    "note": "LoCoMo (snap-research, CC BY-NC 4.0; not committed). Categories: 1 multi-hop, 2 temporal, 3 open-domain, 4 single-hop, 5 adversarial. locomo_conv = the same 10 conversations re-voiced by the asking speaker: implicit style = qa[].implicit_query (+ implicit_subject_speaker) in locomo10_dialog.json; composed style = composed_query over gold_dia_ids (+ subject_speaker) in locomo10_multimem_full.json. Conversation ids index the sample order of data/locomo10.json (0 = conv-26 ... 9 = conv-50), identical in locomo10_dialog.json and in multimem sample_idx."
+  },
+  "splits": {
+    "unit": "conversation",
+    "dev_folds": [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9]],
+    "note": "5-fold leave-conversations-out for development; confirmatory run on held-out conversations after freeze",
+    "confirmatory_protocol": "after freeze every fitted component (LOCATE head, adapters, temperature, Platt, abstention threshold) is refit per fold on that fold's 8 training conversations with the hyper-parameters frozen here and scored only on its 2 held-out conversations; out-of-fold predictions are pooled for the gate statistics (10 clusters).",
+    "caveat": "all 10 conversations were inspected in the 2026-09 reality check, so the confirmatory run tests frozen PROCEDURES on out-of-fold data, not unseen conversations; an external replication needs a new conversation source."
+  },
+  "seeds": {
+    "learned": [0, 1, 2, 3, 4],
+    "resampling": 20260929,
+    "aggregation": "per-question outcomes are averaged over the learned seeds before cluster statistics; per-seed estimates are reported; a contrast whose sign differs across seeds is INCONCLUSIVE whatever its averaged value."
+  },
+  "statistics": {
+    "ci": ["cluster_t", "cluster_bootstrap"],
+    "paired_test": "mcnemar_exact",
+    "multiplicity": "holm",
+    "alpha": 0.05,
+    "cluster": "conversation",
+    "bootstrap_resamples": 10000,
+    "sidedness": "one-sided for superiority and non-inferiority; alpha is family-wise over holm_family",
+    "decision_bound": "the LOWER of the cluster_t (df = n_clusters - 1) and cluster_bootstrap lower bounds: 10 clusters make the bootstrap alone anti-conservative",
+    "mcnemar_role": "question-level exact test on paired binary outcomes; for a superiority claim on a binary metric it must also reject at the hypothesis' Holm level; it ignores clustering, so it is never sufficient alone; a learned arm enters it as the per-question majority over seeds (a tie counts as a miss)",
+    "holm_family": [
+      "G1a.implicit.all-MiniLM-L6-v2", "G1a.composed.all-MiniLM-L6-v2",
+      "G1a.implicit.bge-small-en-v1.5", "G1a.composed.bge-small-en-v1.5",
+      "G1a.implicit.bge-base-en-v1.5", "G1a.composed.bge-base-en-v1.5",
+      "G1b.multihop_vs_fusion", "G1b.multihop_vs_fusion+contiguity", "G1b.overall_noninferior",
+      "G1c.overall_noninferior", "G1c.multihop_superior",
+      "A1.auroc"
+    ],
+    "adjusted_bound": "Holm step-down on one-sided cluster_t p-values; the hypothesis with the j-th smallest p gets its lower bound at level alpha/(m-j+1), a non-rejected one at alpha/m.",
+    "verdicts": "PASS = every pass criterion holds; INCONCLUSIVE = the point estimates meet the thresholds but a bound does not; FAIL otherwise. Kill criteria bind on FAIL; INCONCLUSIVE supports no claim and triggers no kill.",
+    "order": "X0 must PASS before any other gate is evaluated; R1 filters System-One arms before they serve as baselines; exploratory gates are reported without multiplicity correction and never promoted to confirmatory claims."
+  },
+  "arm_glossary": {
+    "bm25": "rank_bm25 Okapi over verbatim speaker-prefixed turns, per-conversation scope",
+    "dense:<encoder>": "cosine over normalized sentence-transformer embeddings, per-conversation scope",
+    "fusion": "L1: reciprocal-rank fusion (k = 60) of bm25 and dense:bge-base-en-v1.5",
+    "fusion+contiguity": "fusion shortlist expanded with same-session neighbouring turns, truncated to the same depth",
+    "fusion+LOCATE": "L2 density over the fusion+contiguity pool (top 100) U {null}; the top of the density is the shortlist",
+    "reranker": "cross-encoder/ms-marco-MiniLM-L-6-v2 over the top 30 of its input list"
+  },
+  "gates": [
+    {
+      "id": "X0",
+      "family": "measurement",
+      "hypothesis": "The v2 harness reproduces the reality-check baseline ladder, so every v2 contrast is measured against the same baselines.",
+      "data": "locomo, categories 1-4, per-conversation scope, dev_folds",
+      "metric": "hit@1 (top-ranked turn is a gold evidence turn)",
+      "arms": ["hybrid+rerank: fusion -> reranker (ms-marco-MiniLM-L-6-v2, depth 30)", "dense:all-MiniLM-L6-v2"],
+      "pass": "|hit@1(hybrid+rerank) - 0.524| <= 0.02 AND |hit@1(dense:all-MiniLM-L6-v2) - 0.176| <= 0.02",
+      "kill": "the harness does not reproduce: fix the harness before ANY other gate is evaluated (not a thesis kill)",
+      "thresholds": {"hybrid_rerank_hit1": 0.524, "dense_minilm_hit1": 0.176, "tolerance": 0.02},
+      "source": "experiments/results/locomo_reality_check_full.json: n = 1535, hybrid+rerank 0.5238 [0.4987, 0.5483], dense:all-MiniLM-L6-v2 0.1759 [0.1528, 0.1994]"
+    },
+    {
+      "id": "G1a",
+      "family": "confirmatory",
+      "hypothesis": "State identifiability: conditioning the query on the asking speaker's persona retrieves speaker-relative evidence ('when did I ...') that no state-free or trivially state-aware baseline trained on the same data retrieves.",
+      "data": "locomo_conv, implicit and composed styles, per-conversation scope",
+      "metric": "recall@10 on gold dia_ids (fraction of gold turns in the top 10), out-of-fold",
+      "arms": [
+        "context-head (state = asking speaker persona)",
+        "static-adapter (same data, no state)",
+        "shuffled-state control (persona permuted across questions, trained identically)",
+        "speaker-name-prefix (non-learned: asking speaker's name prepended to the query)"
+      ],
+      "encoders": ["all-MiniLM-L6-v2", "bge-small-en-v1.5", "bge-base-en-v1.5"],
+      "pass": "for at least one encoder and for BOTH styles: mean(context-head - best comparator) >= +0.03 AND its Holm-adjusted cluster lower bound > 0; best comparator = the comparator arm with the highest pooled out-of-fold mean for that encoder x style",
+      "kill": "no encoder passes: drop state-conditioning as a thesis (the context head is archived as a negative result)",
+      "thresholds": {"delta": 0.03, "lower_bound_gt": 0.0, "k": 10},
+      "tests": ["G1a.implicit.all-MiniLM-L6-v2", "G1a.composed.all-MiniLM-L6-v2", "G1a.implicit.bge-small-en-v1.5", "G1a.composed.bge-small-en-v1.5", "G1a.implicit.bge-base-en-v1.5", "G1a.composed.bge-base-en-v1.5"]
+    },
+    {
+      "id": "G1b",
+      "family": "confirmatory",
+      "hypothesis": "First-stage multi-evidence recall: an evidence density over the candidate pool recovers ALL the turns a multi-hop question needs more often than fusion alone or fusion with contiguity expansion alone.",
+      "data": "locomo, categories 1-4 (multi-hop = category 1), per-conversation scope",
+      "metric": "all-evidence recall@30 (1 iff every gold evidence turn is in the top 30, else 0)",
+      "arms": ["fusion", "fusion+contiguity", "fusion+LOCATE"],
+      "pass": "multi-hop: mean(fusion+LOCATE - fusion) >= +0.05 AND mean(fusion+LOCATE - fusion+contiguity) >= +0.05, each with Holm-adjusted cluster lower bound > 0; overall (cats 1-4): non-inferior to fusion at margin 0.02 (Holm-adjusted lower bound of the difference > -0.02)",
+      "kill": "LOCATE is not a candidate-stage layer: L1 ships as fusion+contiguity, and LOCATE is kept only for what A1/C1 establish",
+      "thresholds": {"k": 30, "pool": 100, "delta_multihop": 0.05, "lower_bound_gt": 0.0, "ni_margin": 0.02},
+      "tests": ["G1b.multihop_vs_fusion", "G1b.multihop_vs_fusion+contiguity", "G1b.overall_noninferior"]
+    },
+    {
+      "id": "G1c",
+      "family": "confirmatory",
+      "hypothesis": "Pipeline: inserting LOCATE between fusion and the reranker costs nothing overall and helps multi-hop questions (retrieval level until an LLM reader is available).",
+      "data": "locomo, categories 1-4 (multi-hop = category 1), per-conversation scope",
+      "metric": "hit@3 after reranking (any gold evidence turn in the top 3)",
+      "arms": ["fusion -> reranker", "fusion -> LOCATE -> reranker"],
+      "pass": "overall: Holm-adjusted lower bound of mean(LOCATE arm - fusion arm) > -0.02 (non-inferior); multi-hop: Holm-adjusted lower bound of the difference > 0 (superior)",
+      "kill": "LOCATE is removed from the reranking path; an answer-level re-test with an LLM reader is a NEW pre-registration, not a rescue of this one",
+      "thresholds": {"k": 3, "rerank_depth": 30, "ni_margin": 0.02, "lower_bound_gt": 0.0},
+      "tests": ["G1c.overall_noninferior", "G1c.multihop_superior"]
+    },
+    {
+      "id": "A1",
+      "family": "confirmatory",
+      "hypothesis": "Abstention: the null slot of the LOCATE density flags adversarial / unanswerable questions (LoCoMo category 5) without abstaining on answerable ones.",
+      "data": "locomo, categories 1-5, per-conversation scope",
+      "metric": "AUROC of the null-slot mass for category 5 vs categories 1-4 (pooled out-of-fold); false abstention = fraction of category 1-4 questions whose null mass is >= tau",
+      "arms": ["fusion+LOCATE null slot"],
+      "pass": "AUROC >= 0.70 AND Holm-adjusted cluster lower bound > 0.60 AND false abstention on categories 1-4 <= 0.10 at tau frozen per fold on its calibration (training) conversations",
+      "kill": "the null slot is not an abstention signal: drop it from LOCATE; abstention is left to DECIDE / the System-Two reader",
+      "thresholds": {"auroc_min": 0.70, "auroc_lower_bound_gt": 0.60, "false_abstention_max": 0.10},
+      "operationalization": "tau = the threshold maximizing Youden's J on the fold's training conversations; the AUROC cluster bound resamples conversations and recomputes the pooled AUROC (cluster_t runs on per-conversation AUROCs).",
+      "tests": ["A1.auroc"]
+    },
+    {
+      "id": "C1",
+      "family": "confirmatory",
+      "hypothesis": "Calibration: with a temperature fitted on other conversations, the LOCATE top-1 probability is calibrated within every category.",
+      "data": "locomo, categories 1-4, per-conversation scope",
+      "metric": "top-1 ECE (15 equal-width bins, manifold_mvp.stats.ece) per category per held-out fold; calibration slope = logistic-regression slope of top-1 correctness on logit(top-1 confidence), pooled out-of-fold",
+      "arms": ["fusion+LOCATE, temperature fitted on the fold's training conversations"],
+      "pass": "ECE <= 0.06 for every category on every held-out fold AND calibration slope in [0.8, 1.25]",
+      "kill": "LOCATE scores are not exposed as probabilities; System One / Two consume DECIDE's cross-fitted Platt scores instead",
+      "thresholds": {"ece_max": 0.06, "ece_bins": 15, "slope_range": [0.8, 1.25], "min_cell_n": 50},
+      "operationalization": "a category x fold cell with n < min_cell_n (open-domain has 96 questions in all) is pooled across folds for that category, still out-of-fold. A threshold on every fold, not a p-value: outside holm_family."
+    },
+    {
+      "id": "R1",
+      "family": "measurement",
+      "hypothesis": "Typed-decision validity: a System-One arm is a stable, calibrated measurement before it may serve as a baseline or a DECIDE arm.",
+      "data": "locomo, categories 1-4, candidate lists from fusion",
+      "metric": "repeat flip rate (same input twice), option-name effect (change in positive rate when option labels are renamed or reordered, percentage points), top-1 ECE after cross-fitted Platt",
+      "arms": ["cross-encoder", "laya (open System-One)", "jev-compatible HTTP"],
+      "pass": "flip rate <= 0.02 AND option-name effect <= 3 points AND post-Platt ECE <= 0.05",
+      "kill": "the arm is excluded from best-baseline and from DECIDE",
+      "thresholds": {"flip_max": 0.02, "option_name_effect_max_points": 3, "post_platt_ece_max": 0.05}
+    },
+    {
+      "id": "E1prime",
+      "family": "exploratory",
+      "hypothesis": "Graph-geodesic bridging: shortest paths on a turn graph under a LEARNED metric reach multi-hop evidence that the same graph under an identity, whitening or random metric does not.",
+      "data": "locomo, category 1 (multi-hop), per-conversation scope",
+      "metric": "recall@10 (fraction of gold evidence turns in the top 10)",
+      "arms": ["graph-geodesic, learned metric", "identity metric", "whitening metric", "random metric"],
+      "pass": "mean(learned - identity) >= +0.03 AND mean(learned - random) >= +0.03; whitening is reported, and a gain whitening matches is attributed to whitening, not to learning",
+      "kill": "archive all Riemannian code as a negative result",
+      "thresholds": {"delta": 0.03, "k": 10}
+    },
+    {
+      "id": "P1",
+      "family": "exploratory",
+      "hypothesis": "C2 signature keys: path-signature keys index procedures better than order-agnostic or recurrent keys.",
+      "data": "procedural trajectories (SkillEvolBench / Mind2Web; not yet in data/)",
+      "metric": "top-1 retrieval of the matching procedure",
+      "arms": ["signature keys (manifold_mvp.signature)", "mean-pooled keys", "GRU keys", "linear-CDE keys"],
+      "pass": "mean(signature - best of mean-pooled / GRU / linear-CDE) >= +0.05 top-1",
+      "kill": "drop C2",
+      "thresholds": {"delta": 0.05}
+    },
+    {
+      "id": "U1",
+      "family": "exploratory",
+      "hypothesis": "Encoder upgrade without re-embedding: an orthogonal Procrustes adapter maps new-encoder queries into the old index's space.",
+      "data": "locomo, categories 1-4, dense only, per-conversation scope; adapter fit on the training conversations' turns (paired old/new embeddings of the same text)",
+      "metric": "recall@10 (fraction of gold evidence turns in the top 10), out-of-fold",
+      "arms": ["old->old: all-MiniLM-L6-v2 queries on the all-MiniLM-L6-v2 index", "procrustes: bge-small-en-v1.5 queries rotated onto the all-MiniLM-L6-v2 index (both 384-d)", "new->new: bge-small-en-v1.5 re-embedded index (ceiling)"],
+      "pass": "procrustes >= old->old AND (procrustes - old->old) / (new->new - old->old) >= 0.30",
+      "kill": "no adapter path: an encoder upgrade requires re-embedding the store",
+      "thresholds": {"gap_closed_min": 0.30}
+    }
+  ]
+}

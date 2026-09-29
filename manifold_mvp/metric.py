@@ -1,21 +1,45 @@
 """
-LAYER 0 / 3.2 — the metric.  Analytic, not learned (the hybrid backbone the
-formalism recommends: pullback of a frozen decoder + an optional conformal
-correction lambda(z)).
+EXPLORATORY (v2) — the pullback metric. Not in the retrieval path.
 
     G(z) = J_g(z)^T J_g(z)            (Shao-Kumar-Fletcher 2018)
     <u,v>_z = u^T G(z) v
     G_conf(z) = lambda(z) * G(z)      (Arvanitidis-style conformal factor)
 
-Jacobians are taken with torch.func (vmap + jacrev). On MPS a couple of the
-underlying ops can fall back to CPU but the math is identical; for the E0 probe
-we run on CPU/float64 anyway. Everything here is differentiable, so the same
-code path supports a *learned* metric later (swap g for g_theta, or make lambda
-a small MLP) with no structural change.
+Status after the September 2026 reality check (docs/REALITY_CHECK_2026-09.md):
+on a real encoder the chart g is a LINEAR PCA map, so J is constant and
+G0 = V^T V = I; a learned conformal lambda trained to match chart distances then
+collapses to 1 (measured 1.01 +/- 0.07) and geodesics equal straight lines, which
+lost to full-dimension cosine. Pullback geodesics through linear or same-dimension
+decoders are straight (arXiv 2505.17517). Kept only for the exploratory E1' test,
+which must beat identity, whitening and random-metric controls.
+
+Jacobians are taken with torch.func (vmap + jacrev).
 """
 from __future__ import annotations
 import torch
 from torch.func import jacrev, vmap
+
+
+class TorchPCA:
+    """Linear chart x in R^D <-> z in R^d; decode(z) = z V^T + mean is the chart g.
+    Because V has orthonormal columns, its pullback metric is exactly the identity."""
+
+    def __init__(self, d: int):
+        self.d = d
+        self.mean = None
+        self.V = None          # (D, d), orthonormal columns
+
+    def fit(self, X: torch.Tensor):
+        self.mean = X.mean(0)                            # (D,) so decode((d,)) -> (D,) for jacrev
+        _, _, Vh = torch.linalg.svd(X - self.mean, full_matrices=False)
+        self.V = Vh[: self.d].T.contiguous()             # (D, d)
+        return self
+
+    def encode(self, X: torch.Tensor) -> torch.Tensor:
+        return (X - self.mean) @ self.V                  # (.., d)
+
+    def decode(self, Z: torch.Tensor) -> torch.Tensor:
+        return Z @ self.V.T + self.mean                  # (.., D)
 
 
 class PullbackMetric:

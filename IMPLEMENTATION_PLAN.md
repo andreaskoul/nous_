@@ -1,120 +1,109 @@
-# Implementation Plan — Geometric-Memory MVP on M4
+# Implementation Plan — nous_ v2
 
-Companion to the Literature Map, the Formalism, and the Act-II Protocol. This
-turns the dossier into a build sequence. The accompanying `manifold_mvp/`
-package already implements Phase 1 end-to-end; this document explains the
-borrow/build decisions behind it and the path from here.
-
----
-
-## 1. Borrow map (don't reinvent the wheel) — with M4 verdicts
-
-The search pass checked, per subcomponent, whether a mature implementation
-exists *and survives contact with Apple Silicon + modern PyTorch*.
-
-| Subcomponent | Best existing option | M4 verdict | Decision in the MVP |
-|---|---|---|---|
-| Pullback metric `G=JᵀJ`, geodesics | **stochman** (DTU), **latent-geometry** (PyPI) | stochman is torch-native, fine on MPS; latent-geometry is autodiff-agnostic | **Borrowed the method**, re-implemented in ~50 lines (`metric.py`, `geodesic.py`) to avoid a heavy dep and to control the MPS-safe energy formulation |
-| Riemannian optimiser | **geoopt** (Riemannian Adam) | works on MPS | **Deferred** — the MVP's geodesic uses plain Adam on Euclidean control points; pull in geoopt only when the metric itself becomes learnable (Phase 3) |
-| Modern Hopfield retrieval | **ml-jku/hopfield-layers** | pinned to torch 1.5/1.6 → friction on torch 2.x | **Re-implemented** — retrieval is `softmax(β·φMᵀ)M`, ~10 lines (`locate.py`); not worth a legacy dep |
-| Path signature (C2) | **signatory** (Kidger/Lyons) | **UNUSABLE** — torch 1.8–1.11, py3.7–3.9, no recent macOS wheels, source build must match torch exactly | **Re-implemented natively** — truncated signature via Chen recursion (`signature.py`), fully differentiable, runs on MPS |
-| Grounding / anti-drift | **Relative Representations** (Moschella & Rodolà) | pure cos-sim to anchors → trivial | **Re-implemented**, ~10 lines (`relative.py`); doubles as the Layer-5 stitch |
-| Warped metric backbone | **GAGA** (2410.12779) | reference for Phase 3 | **Deferred** — adopt as the learned-metric backbone once E2 passes on real data |
-| Latent-CoT Navigator | **Coconut / PCCoT** | reference for Phase 4 | **Out of MVP scope** — the density `ρ_θ` is the seed; the unroll comes later |
-| Text encoder | **sentence-transformers / MLX-embeddings** | both run on MPS; MLX is ANE-adjacent | **Pluggable** (Phase 2); synthetic stand-in ships so the loop runs offline today |
-
-**Net:** the only thing genuinely worth re-implementing rather than importing is
-forced by the platform (signatory) or is so small that a dependency costs more
-than it saves (Hopfield, relative reps, the energy geodesic). The heavyweight
-borrows (GAGA, geoopt, Coconut) are correctly *deferred* to the phase where they
-earn their complexity.
+Companion to `docs/DESIGN_v2.md` (architecture + math) and
+`docs/REALITY_CHECK_2026-09.md` (why v1 was retired). This file tracks the build order,
+the evidence each phase must produce, and the risks.
 
 ---
 
-## 2. The M4 execution model (read once, save yourself a day)
+## 0. Where we are (2026-09-29)
 
-- **Run on the GPU through MPS, with unified memory.** That is where autograd
-  Jacobians (`torch.func.jacrev` + `vmap`), the geodesic energy solve, and
-  retrieval belong.
-- **The "neural chip" (ANE) is not for this.** It is Core ML, inference-only,
-  fixed ops. It cannot run the metric Jacobian or the geodesic optimiser. Its
-  legitimate role is **Phase 4**: export the *frozen encoder* to Core ML so the
-  embedding forward pass runs on the ANE while everything geometric stays on the
-  GPU. Treat it as an inference accelerator, not a compute target for the science.
-- **No float64 on MPS.** Keep the metric/geodesic in float32 on-device; use the
-  `--precision float64` path (auto-CPU) only for the E0 sensitivity check.
-- **Expect a few op fallbacks.** Some `torch.func` transforms silently fall back
-  to CPU on MPS; the math is identical, only speed differs. Profile before
-  optimising.
+| Phase | Status | Evidence |
+|---|---|---|
+| 1 — Analytic MVP on synthetic ground truth (`run_mvp.py`) | ✅ done; kept as the historical record of v1 | synthetic only |
+| Reality check on real data + 2025–26 literature + Jev | ✅ done | `experiments/results/locomo_reality_check_full.json`; 52 verified claims |
+| v1 thesis (curved metric, geodesic recall, conversation-state head, anchors) | ❌ **retired** | Gate-1 fails (−0.110 on bge-base); λ → 1; `L_gnd` has zero gradient |
+| 2′ — v2 modules (store, candidates, locate v2, decide, stats, prereg) | 🔨 in progress | `tests/test_*.py` |
+| 2′ — dev evaluation of the v2 gate family (`eval.py`) | 🔨 in progress | `experiments/results/v2_dev_eval.json` |
+| 3′ — freeze plan → confirmatory run on **untouched** data | ⏳ | see §3 |
 
 ---
 
-## 3. Phased build-out
+## 1. Borrow map (2026 edition)
 
-### Phase 0 — Environment (½ day)
-`python3 -m venv`, `pip install torch numpy`, `python run_mvp.py --quick`. If the
-smoke test prints a dashboard, the platform is good. (Add
-`sentence-transformers` only when you reach Phase 2.)
-
-### Phase 1 — Analytic MVP on synthetic ground truth ✅ *(this package)*
-All four experiments + C2 + grounding run against a world with a *known* answer,
-so each operator is validated in isolation before any real data muddies the
-signal. Status: **done and passing** (E0 GO, E2 Gate-1 PASS, C2 faithful).
-
-### Phase 2 — Real encoder, real corpus (1 week) — **the decisive phase**
-Swap `synthetic.py` only.
-1. Pick an encoder that runs on MPS (a small sentence-transformer is fine).
-2. Build a corpus where the correct memory genuinely depends on a state `s`
-   (e.g. same query, different conversation history → different right answer).
-   This is the honest version of the E2 ambiguity the synthetic corpus fakes.
-3. Define the metric: cheapest is the **pullback of a frozen decoder**; if there
-   is no decoder, fit a low-d **PCA chart** and use its inverse as `g`, or learn
-   a conformal `λ_θ`.
-4. Re-run E0→E2 with **the same** `PREREG` thresholds. **Gate 1** is whether the
-   context head beats *all three* baselines — including the **filesystem
-   landmine** (dumb storage scores ~0 under query noise here, but on a real
-   benchmark it is brutal — 74% on LoCoMo). Beating cosine is easy and
-   meaningless; beating dumb storage is the test.
-
-### Phase 3 — Make the metric learnable + the C2 bridge invertible (2–3 weeks)
-Only if Phase 2 passes.
-- Replace the fixed conformal factor with a learned `λ_θ(z)` (or adopt **GAGA**'s
-  warped metric); pull in **geoopt** for Riemannian Adam on metric parameters.
-- Train a real `σ⁻¹` decoder (the MVP uses a linear inverse on invariants). The
-  **C2 kill criterion** is: from `σ(γ)` regenerate a trajectory that, when
-  unrolled, reproduces the skill. The MVP's 17.7× skill-separability is the
-  necessary precondition; invertibility is the sufficient one.
-
-### Phase 4 — Navigator + ANE inference (open-ended)
-- Add the latent-CoT unroll (Coconut/PCCoT style) that walks `ρ_θ` as a
-  controlled flow — this is where the density-as-parallel-sampler (E3) becomes a
-  real test-time mechanism rather than a top-K readout.
-- Export the frozen encoder to Core ML (`coremltools`) so embedding inference
-  uses the ANE; keep the geometric loop on MPS.
+| Layer | Best open option | Decision |
+|---|---|---|
+| L0 store | verbatim turns (2601.00821) | **Adopted.** No LLM fact extraction |
+| L1 candidates | BM25 ⊕ dense fusion (2606.04194); encoder chosen on LMEB-Dialogue, **not** MTEB (2603.12572) | **Built** (`candidates.py`); no query instructions by default |
+| L2 locate | modern-Hopfield read = one attention step (2008.02217) | **Rebuilt as a calibrated density with a null slot** (`locate.py`) — the nous_ core |
+| L3 decide | cross-encoders; **Laya** (Apache-2.0, open System-One); hosted **Jev** `jev-1.13.0` (closed) | **Pluggable** (`decide.py`); Jev only as a pinned, cached reference arm |
+| Distillation teacher | cross-encoder / Laya over the shortlist (2605.28062) | **Adopted** in the v2 objective |
+| Statistics | cluster-t + cluster bootstrap, exact McNemar, Holm (2411.00640) | **Built** (`stats.py`) |
+| Pre-registration | frozen plan + hash lock + deviation ledger (2609.34227 style) | **Built** (`prereg.py`, `prereg/`) |
+| Learned Riemannian metric (GAGA) | — | **Frozen / exploratory only** (E1′ with controls) |
+| Signatures (C2) | — | **Re-scoped** to procedural retrieval keys (P1) |
+| NTK-mirror controllers | repo only, no numbers | **Deferred**; behavioural memory only, if ever |
 
 ---
 
-## 4. Risk register (the landmines, with where each is handled)
+## 2. Phase 2′ — build + development evaluation (now)
+
+1. **Modules.** Seven modules with disjoint ownership (`stats`, `prereg`, `store`,
+   `candidates`, `decide`, `locate` + `losses`, `c2`/`relative`). Each was implemented,
+   adversarially reviewed and fixed, and each has its own offline test file.
+2. **Integration.** `manifold_mvp/pipeline.py` does the batching, state, teacher and
+   training. `eval.py` runs the gate family (dev mode). `config.py` is the typed view of
+   `prereg/plan_v2.json`.
+3. **Development evaluation.** 5-fold leave-conversations-out on LoCoMo (G1b, G1c,
+   A1, C1) and LoCoMo-Conv (G1a), with 2 encoders × 5 seeds, and X0 reproduction of
+   the reality-check bar. Verdicts are **development evidence only**.
+4. **System-One arm evidence.** `experiments/system_one_rerank.py` compares a
+   cross-encoder, bge-reranker and Laya on the same shortlist, and forced-Choice vs
+   Noul-with-null abstention.
+
+Exit criteria: all tests green; X0 reproduces within ±0.02; dev verdicts recorded,
+including failures.
+
+## 3. Phase 3′ — confirmatory run
+
+- **Freeze.** `python -m manifold_mvp.prereg freeze prereg/plan_v2.json`, git-tagged.
+  Every later change is logged in `prereg/deviations.md`.
+- **Held-out data must be untouched.** All 10 LoCoMo conversations and LoCoMo-Conv
+  (derived from them) were used in development, so they cannot be confirmatory.
+  Candidates:
+  - LongMemEval-S *cleaned* (`xiaowu0162/longmemeval-cleaned`): knowledge-update and
+    abstention subsets;
+  - LoCoMo-Plus (2602.10715);
+  - a freshly collected or generated set frozen before any look.
+- **End-to-end QA (G1c′).** Needs a fixed reader and a strict judge, which are not
+  available offline. Report retrieval-level G1c until then.
+
+## 4. Phase 4′ — System-One integration
+
+- **Laya as teacher and arm.** Refit its temperatures on held-out conversations
+  (its card reports ECE 0.466 → 0.081 after refitting), and run the R1 validity checks:
+  repeat-run flips, option-name invariance and injection margin.
+- **Hosted Jev.** `SystemOneHTTPDecider(model="jev-1.13.0")` with a response cache,
+  only with a user-supplied `TYPESAFE_API_KEY`, reported as a labelled reference arm.
+- **Optional.** Fine-tune Laya with RLCD (proper-scoring REINFORCE) on
+  training-conversation relevance labels, as an open System-One reranker specialised to
+  memory.
+
+## 5. Phase 5′ — exploratory tracks (outside the confirmatory family)
+
+- **E1′** graph-geodesic bridging (kNN + session + entity edges; learned low-rank
+  local metric) with identity / whitening / random-metric controls. Kill: archive
+  `metric.py`, `conformal.py`, `geodesic.py` and `curvature.py` as a negative result.
+- **P1** C2 signature keys (lead-lag, windowed, Chen-composable) on SkillEvolBench /
+  Mind2Web against mean-pooled and GRU/linear-CDE keys. Kill: drop C2.
+- **U1** encoder upgrade by an orthogonal Procrustes query adapter
+  (`relative.fit_query_adapter`).
+- **Key-side state** (CMR-style temporal context on memories; EvoEmbedding-style
+  contextual keys) and supersession/validity fields, evaluated on LongMemEval
+  knowledge-update and MemoryAgentBench FactConsolidation.
+
+---
+
+## 6. Risk register (v2)
 
 | Risk | Signal | Handled by |
 |---|---|---|
-| Manifold is flat → geometry decorative | E0 shortcut ≈ 0 | `curvature.py` gate runs first |
-| Curvature present but no recall edge | E0 GO yet E1 flat (seen in the synthetic run!) | E1 reported honestly; do not over-claim from E0 alone |
-| Dumb storage beats you | filesystem baseline | mandatory baseline in `locate.py` |
-| "State" story is decorative | static head ≈ context head | static-head ablation in E2 |
-| Signature loses the skill | low intra/inter separability | C2 separability test in `run_mvp.py` |
-| Semantic drift | anchor-coord drift large | relative reps (`relative.py`) |
-| Density collapses to a point (feature collapse) | `ρ_θ` entropy → 0 | watch retrieval entropy in E2/E3; add an entropy floor if it appears |
-| MPS float64 / op fallback surprises | NaNs or CPU stalls | `device.py` resolves precision; profile before tuning |
-
----
-
-## 5. What to verify by hand before publishing (carried over from the dossier)
-
-- The exact theorem in *Reasoning by Superposition* (2505.12514) before leaning
-  on the superposition story for E3.
-- The precise signature/log-signature definition you adopt (Lyons/Kidger) — the
-  MVP's truncated form is standard, but pin the convention before Act III.
-- That on **real** data the E0 GO actually translates into an E1/E2 win; the
-  synthetic split (curved but no recall edge) is a standing warning that it may
-  not.
+| State is decorative (again) | context ≈ static adapter / shuffled / speaker-prefix | G1a with three controls; kill rule |
+| nous_ is just a cheaper copy of its teacher | gains track the teacher and vanish without KD | report recall and latency at matched quality; KD ablation |
+| Reranker lowers abstention | correct abstention falls after reranking (seen with Jev: 63.6 → 54.1%) | A1 is gated separately; null slot trained with Brier |
+| Typed-decision arms are unstable | option-name flips, nondeterminism, workload-specific calibration | R1 validity gate; neutral ids; cross-fitted Platt |
+| Prompt injection through stored turns | near-margin hijacks (2609.28613) | quote memories as untrusted; margin-stratified injection test (planned) |
+| 10 clusters is little power | wide cluster CIs | `stats.power_mde` before each gate; confirmatory data beyond LoCoMo |
+| Benchmark noise | 6.4% wrong LoCoMo answer keys; lenient judges | retrieval-level gates; report with and without flagged items |
+| Privacy | embedding inversion / translation | threat model in DESIGN_v2 §8; no privacy claims |
+| Licensing | LoCoMo, LoCoMo-Conv, OpenJev are non-commercial | publishable baselines on Apache/MIT parts (MiniLM, bge, Laya) |
