@@ -273,7 +273,8 @@ def main():
                 sc = fz.copy(); sc[top] = 1e3 + tte[j, top]
                 L.add("fusion->CE", [i], rank_metrics(*full_ranking(bte, j, sc), ev))
             # cross-fitted CE Noul null (Platt on training pairs)
-            pl = PlattCalibrator().fit(ttr[btr.mask], btr.pos[btr.mask].astype(float))
+            pl = PlattCalibrator()
+            pl.fit(ttr[btr.mask], btr.pos[btr.mask].astype(float))
             for seed in seeds:
                 sc_ = train_locate(btr, doc, q_lo[tr], Str, Htr, cfg.weights, teacher=ttr, steps=steps,
                                    lr=cfg.train.lr, bsz=cfg.train.batch, seed=seed, rank=cfg.model.rank,

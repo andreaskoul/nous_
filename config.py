@@ -28,7 +28,7 @@ class PreReg:
     null_auroc: float = 0.70
     null_auroc_lo: float = 0.60
     max_false_abstain: float = 0.10
-    # C1   calibration (top-1, per category, held-out folds)
+    # C1   calibration: debiased equal-mass top-1 ECE per category, pooled out-of-fold, mean over seeds
     max_ece: float = 0.06
     calib_slope: tuple = (0.8, 1.25)
     # X0   harness reproduction (in-harness reality-check bar, cats 1-4)
